@@ -138,3 +138,9 @@ any build. The research tools read the executable at fixed addresses: `tools/pac
 executable's code and data sections are the ones the tools were made with (the Steam build; the Steam wrapper section
 is not compared, so a store copy with the same code passes). An Epic copy has not been tested. If the check fails, the
 setup stops with the sections that differ, before it makes any research data.
+
+## Repeatable VFX inputs and outfit inventory
+
+The pipeline regenerates the main effect list from mined data before main VFX packing and preserves that list around the standalone save-point tool, whose development behavior extends it. Save-point assets are still packed; their stage must not change the earlier main-pack input set on the next run.
+
+The outfit-index replay records the reference pack's `disk_bytes`, `files` and `dds_bytes` as literal build statistics. Ratios against intermediate directories were sensitive to leftover files and whether shader/DDS generation had run. The existing whole-file expected SHA-256 is retained; other outfit data is still reconstructed and verified normally.

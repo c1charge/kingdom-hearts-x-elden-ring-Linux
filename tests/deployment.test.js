@@ -36,3 +36,22 @@ test('Chandelier rebuild refreshes its owned material namespace and retains stre
     assert.equal(read('unrelated.txt'),'keep');
   }
 });
+
+test('main VFX regenerates its list and savepoint preserves it on success and failure', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'kh vfx inputs '));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const write=(file,data)=>{const p=path.join(root,file);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,data);};
+  const list='build/sora_tmp/vfx/fxinv/effect_list.json';
+  write('tools/packgen.js',fs.readFileSync(path.join(__dirname,'../tools/packgen.js')));
+  write('tools/research/vfx/fxinv/build_rows.js',`require('fs').writeFileSync(require('path').join(__dirname,'effect_list.json'),'["main-effect"]');`);
+  write('tools/sora_vfx_pack.js',`const fs=require('fs');const list=JSON.parse(fs.readFileSync(${JSON.stringify(list)}));if(list.length!==1||list[0]!=='main-effect')process.exit(4);fs.mkdirSync('build/sora_pack',{recursive:true});fs.writeFileSync('build/sora_pack/vfx-test.json',JSON.stringify(list));`);
+  for(const fail of [false,true]) {
+    write(list,'["main-effect","stale-savepoint"]');
+    write('tools/sora_savepoint_pack.js',`const fs=require('fs');fs.writeFileSync(${JSON.stringify(list)},'["main-effect","savepoint"]');fs.writeFileSync('build/sora_pack/savepoint-test.json','kept');${fail?'process.exit(7);':''}`);
+    const result=cp.spawnSync(process.execPath,[path.join(root,'tools/packgen.js'),'pack','--only','vfx,savepoint'],{cwd:root,encoding:'utf8'});
+    assert.equal(result.status,fail?1:0,result.stdout+result.stderr);
+    assert.equal(fs.readFileSync(path.join(root,list),'utf8'),'["main-effect"]');
+    assert.equal(fs.readFileSync(path.join(root,'build/sora_pack/vfx-test.json'),'utf8'),'["main-effect"]');
+    assert.equal(fs.readFileSync(path.join(root,'build/sora_pack/savepoint-test.json'),'utf8'),'kept');
+  }
+});

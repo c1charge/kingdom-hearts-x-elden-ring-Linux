@@ -385,6 +385,7 @@ for (let r of targets) {
       return null;
     };
     const tpl2 = DIFF.encoder({ files: files2, corpusIndex, scalarRef, encPtr, jp: JP, hkey, jpKeys, stats: dstats, findEmitter: /\/effects[^/]*\//.test(r) ? findEmitter : null, findTree: /\/effects[^/]*\//.test(r) ? findTree : null })(target);
+    if (r === 'outfits/outfits.json') require('./lib/replay_build_stats').pinOutfitStats(tpl2, target);
     if (dstats.jp) { unresolved.push([r, 'Japanese text not found in the corpus (v2)', inCore]); continue; }
     if (!isAux) { const id = 'out:' + r; OUT_MADE.set(id, target); if (!madeByRoot.has(root)) madeByRoot.set(root, []); madeByRoot.get(root).push({ rel: r, json: target }); }
     put({ kind: 'json', v: 2, format: fmt, corpus, template: tpl2, own_values: own, literals: dstats.literals, literals_v1: v1Literals, ...(bake || {}) });

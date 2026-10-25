@@ -132,12 +132,24 @@ const STEPS = [
   { id: 'ui', phase: 'pack', run: ['tools/sora_ui_pack.js'] },
   { id: 'saveload', phase: 'pack', run: ['tools/sora_saveload_pack.js'] },
   { id: 'er-icons', phase: 'pack', run: () => { if (!erGame) throw new Error('the Elden Ring install is needed for its item icons: --er "<ELDEN RING>\\Game" (or KH_ER_GAME)'); runNode(['tools/er_icons.js', '--game', erGame]); } },
-  { id: 'vfx', phase: 'pack', run: ['tools/sora_vfx_pack.js'] },
+  { id: 'vfx', phase: 'pack', files: ['vfx/fxinv/build_rows.js'], run: () => {
+    // Savepoint development runs can extend this research output. Always rebuild
+    // the main VFX input list from the mined data, not from a prior pack run.
+    runNode(['build_rows.js'], path.join(ROOT, T, 'vfx/fxinv'));
+    runNode(['tools/sora_vfx_pack.js']);
+  } },
   { id: 'vfx-extra-textures', phase: 'pack', run: ['tools/sora_vfx_extra_textures.js'] },
   { id: 'vfx-host', phase: 'pack', run: ['tools/sora_vfx_host.js'] },
   { id: 'vfx-shaders', phase: 'pack', run: ['tools/sora_vfx_shaders.js'] },
   { id: 'vfx-rows', phase: 'pack', run: ['tools/sora_vfx_assets_rows.js'] },
-  { id: 'savepoint', phase: 'pack', run: ['tools/sora_savepoint_pack.js'] },
+  { id: 'savepoint', phase: 'pack', run: () => {
+    // Keep standalone savepoint behavior, but do not let this downstream stage
+    // mutate the research input consumed by the earlier main VFX stage.
+    const list = path.join(ROOT, T, 'vfx/fxinv/effect_list.json');
+    const original = fs.readFileSync(list);
+    try { runNode(['tools/sora_savepoint_pack.js']); }
+    finally { fs.writeFileSync(list, original); }
+  } },
   { id: 'party', phase: 'pack', run: ['tools/party_pack.js'] },
   { id: 'party-lookat', phase: 'pack', run: ['tools/party_lookat_pack.js'] },
   { id: 'party-menu-lights', phase: 'pack', run: ['tools/party_menu_lights.js'] },
