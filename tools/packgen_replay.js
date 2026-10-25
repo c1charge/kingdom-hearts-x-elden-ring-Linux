@@ -119,6 +119,23 @@ if (doApply) {
   fs.rmSync(OUT, { recursive: true, force: true });
   let made = 0, bad = 0; const badList = [];
   const auxiliary = [];
+  const failures = [];
+  const failureReport = path.join(ROOT, 'build/packgen', OVERLAYS ? 'replay_failures_overlays.json' : 'replay_failures.json');
+  fs.rmSync(failureReport, { force: true });
+  function recordFailure(rel, rec, recipeFile, reason, actual) {
+    const ids = [...new Set([...(rec.corpus || []), ...(rec.kind === 'copy' ? [rec.from] : [])])];
+    const sources = ids.map(id => {
+      try {
+        const data = fs.readFileSync(corpusPath(id));
+        const live = originalCorpusPath(id);
+        return { id, frozen: frozenInputs.has(id), sha256: sha(data), bytes: data.length,
+          live_sha256: fs.existsSync(live) ? sha(fs.readFileSync(live)) : null,
+          ...(rec.kind === 'text' ? { lines: data.toString('utf8').split('\n').length } : {}) };
+      } catch (e) { return { id, error: e.code || e.message }; }
+    });
+    failures.push({ file: rel, recipe: recipeFile, kind: rec.kind, reason,
+      expected_sha256: rec.sha256, actual_sha256: actual || null, sources });
+  }
   const auxOut = OUT + '_aux';
   fs.rmSync(auxOut, { recursive: true, force: true });
   const files = fs.readdirSync(DIR).filter((x) => RECIPES.test(x)).sort();
@@ -145,10 +162,15 @@ if (doApply) {
           buf = Buffer.from(SER.serialize(value, rec.format), 'utf8');
         } else if (rec.kind === 'jsontext') buf = Buffer.from(rec.parts.map((p) => (Array.isArray(p) ? JSON.stringify(at(corpusJson(rec.corpus[p[0]]), p[1])) : p)).join(''), 'utf8'); // the file's own text, its values referenced
         else if (rec.kind === 'raw') buf = Buffer.from(rec.text, 'utf8'); // our own design file
-        else if (rec.kind === 'text') buf = Buffer.from(rec.lines.map((l) => (Array.isArray(l) ? corpusLines(rec.corpus[l[0]])[l[1]] : l)).join('\n'), 'utf8');
+        else if (rec.kind === 'text') buf = Buffer.from(rec.lines.map(l => {
+          if (!Array.isArray(l)) return l;
+          const id = rec.corpus[l[0]], line = corpusLines(id)[l[1]];
+          if (line === undefined) throw new Error(`missing source line ${l[1]} in ${id}`);
+          return line;
+        }).join('\n'), 'utf8');
         else throw new Error('recipe kind ' + rec.kind);
-      } catch (e) { bad++; badList.push(`${rel}: ${e.message}`); continue; } finally { delete rec._keys; }
-      if (sha(buf) !== rec.sha256) { bad++; badList.push(`${rel}: made, but not the recorded file (SHA-256 differs)`); continue; }
+      } catch (e) { bad++; badList.push(`${rel}: ${e.message}`); recordFailure(rel, rec, f, e.message); continue; } finally { delete rec._keys; }
+      if (sha(buf) !== rec.sha256) { bad++; badList.push(`${rel}: made, but not the recorded file (SHA-256 differs)`); recordFailure(rel, rec, f, 'SHA-256 differs', sha(buf)); continue; }
       // Stage auxiliary outputs too: neither failures nor --check may modify live inputs.
       const dst = recRoot === 'aux' ? path.join(auxOut, rel) : path.join(OUT, rel);
       if (recRoot === 'aux') auxiliary.push([dst, path.join(ROOT, rel)]); fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.rmSync(dst, { force: true }); fs.writeFileSync(dst, buf);
@@ -158,6 +180,10 @@ if (doApply) {
   }
   console.log(`packgen_replay: ${made} file(s) made and checked, ${bad} failed`);
   for (const l of badList.slice(0, 30)) console.log('   ' + l);
+  if (bad) {
+    fs.writeFileSync(failureReport, JSON.stringify({ node: process.version, zlib: process.versions.zlib, failures }, null, 2) + '\n');
+    console.log('packgen_replay: full failure report: ' + path.relative(ROOT, failureReport));
+  }
   if (!check && !bad) {
     for (const [source, target] of auxiliary) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.rmSync(target, { force: true }); fs.copyFileSync(source, target); }
     (function walk(d, base) { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, base); else { const t = path.join(PACK, path.relative(base, p)); fs.mkdirSync(path.dirname(t), { recursive: true }); fs.rmSync(t, { force: true }); fs.copyFileSync(p, t); } } })(OUT, OUT);

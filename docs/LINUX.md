@@ -77,9 +77,11 @@ Rerun the same command after fixing the reported error. The existing `build/pack
 
 On upgrading from an older Linux setup, or when the compiler DLL, helper, Proton executable, or setup overrides change, setup automatically deletes only cached shader `.asm` files and invalidates pack/replay/shaders/gen completion. Extracted data, bytecode, completed extraction/conversion/research steps, settings, and saves are retained. The selected disassembler identity is recorded in `build/linux-disassembler.json`. This repairs the earlier case where outfit stages recorded completion despite untranslated materials.
 
+The Chandelier stage refreshes its generated `xsi/weapons/materials_xwb` namespace on rebuild. Older setup versions copied only missing files there, allowing stale PNGs to remain even when freshly generated PNGs matched the replay hashes. Other stream copy precedence is unchanged.
+
 `--rebuild-pack` reruns packgen phases and generated tables; it does not erase all converter caches and is not a workaround for changed game inputs. `--workers N` controls pipeline workers and native compiler build parallelism. No writes go into original game directories; output aliases into those directories are rejected.
 
-Logs: `build/packgen/logs/linux-setup.log` plus existing packgen/shader logs. Errors preserve the failed command's status; a failed validation is not treated as successful installation. Simultaneous setup/launch operations in one mod folder are unsupported.
+Logs: `build/packgen/logs/linux-setup.log` plus existing packgen/shader logs. Failed replay writes `build/packgen/replay_failures.json` (or `replay_failures_overlays.json`), listing every rejected file, expected/actual hashes, source hashes, and whether each input came from a preserved snapshot. The report contains provenance rather than shader or texture contents. Missing text-recipe lines are reported explicitly rather than silently joined as empty strings. Errors preserve the failed command's status; a failed validation is not treated as successful installation. Simultaneous setup/launch operations in one mod folder are unsupported.
 
 ## Launching
 

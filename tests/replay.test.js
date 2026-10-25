@@ -72,3 +72,16 @@ test('tampered snapshot fails closed and leaves live pack unchanged', t => {
   assert.match(result.stderr,/snapshot damaged/);
   assert.equal(f.read('build/sora_pack/ui/data.json'),f.target);
 });
+
+test('failure report identifies frozen inputs and rejects missing text lines explicitly', t => {
+  const f=fixture(t);
+  f.recipe('files_text.json',{root:'text',files:{'shader.wgsl':{kind:'text',corpus:['pack:ui/data.json'],lines:[[0,100]],sha256:hash('')}}});
+  const result=f.run('--check');
+  assert.equal(result.status,1);
+  assert.match(result.stdout,/missing source line 100/);
+  const report=JSON.parse(f.read('build/packgen/replay_failures.json'));
+  assert.equal(report.failures.length,1);
+  assert.equal(report.failures[0].sources[0].frozen,true);
+  assert.equal(report.failures[0].sources[0].sha256,hash(JSON.stringify({rows:['a','b','c']})));
+  assert.equal(f.read('build/sora_pack/ui/data.json'),JSON.stringify({rows:['a','b','c']}));
+});

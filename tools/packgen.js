@@ -160,6 +160,9 @@ const STEPS = [
     runNode([`${T}/packgen/xwb/tools/xwb_chandelier.js`]);
     runNode([`${T}/packgen/er90/tools/xsi_weapon_er_slots.js`, `${T}/packgen/er90/pack`]);
     for (const s of ['xw', 'xwb', 'er90']) copyNew(`${T}/packgen/${s}/pack`, 'build/sora_pack');
+    // This namespace belongs exclusively to Chandelier. Rebuilds must refresh its
+    // translated material and textures instead of retaining a previous generation.
+    copyOver(`${T}/packgen/xwb/pack/xsi/weapons/materials_xwb`, 'build/sora_pack/xsi/weapons/materials_xwb');
   } },
   { id: 'lip', phase: 'pack', run: ['tools/face_lip_pack.js', '--pack', 'build/sora_pack', '--out', 'build/sora_pack'] },
   // ---- the streams' pack files (recipes)
