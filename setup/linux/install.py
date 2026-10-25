@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -104,6 +105,23 @@ def protect_games(ctx):
             raise ValueError(f'mod output aliases original game files: {output}')
 
 
+def check_er_version(command, env, log):
+    try:
+        output = run(command, env=env, log=log)
+    except (RuntimeError, OSError) as error:
+        print(f'WARNING: Unable to determine Elden Ring version ({error}). '
+              'Continuing setup; confirm your executable is 2.7.1.0 or 2.7.2.0.')
+        return
+    versions = [line.strip() for line in output.splitlines()
+                if re.fullmatch(r'\d+\.\d+\.\d+\.\d+', line.strip())]
+    if len(set(versions)) != 1 or versions[0] == '0.0.0.0':
+        print('WARNING: Unable to determine Elden Ring version from the helper output. '
+              'Continuing setup; confirm your executable is 2.7.1.0 or 2.7.2.0.')
+        return
+    if versions[0] not in ('2.7.1.0', '2.7.2.0'):
+        raise ValueError(f'unsupported Elden Ring version {versions[0]}; expected 2.7.1.0 or 2.7.2.0')
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     if args.workers < 1:
@@ -176,9 +194,7 @@ def main(argv=None):
              ROOT / 'setup/linux/windows-helper.c', '-lversion', '-o', helper], log=log)
     pe64(helper)
     bridge = [sys.executable, ROOT / 'setup/linux/bridge.py']
-    er_version = run([*bridge, helper, 'version', ctx['er']], env=env, log=log)
-    if not any(line.strip() in ('2.7.1.0', '2.7.2.0') for line in er_version.splitlines()):
-        raise ValueError('unsupported Elden Ring version; expected 2.7.1.0 or 2.7.2.0')
+    check_er_version([*bridge, helper, 'version', ctx['er']], env, log)
     if not dxc.is_file():
         if args.dxc or args.no_download:
             raise ValueError(f'DXC missing: {dxc}')

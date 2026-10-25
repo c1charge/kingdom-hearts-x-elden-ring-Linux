@@ -57,7 +57,7 @@ bash setup-linux.sh \
 
 1. Discover games, Steam, Proton and prefix. Check Windows mod artifacts and loader version marker.
 2. Check native Node/npm. Install locked npm dependencies if missing, unless `--no-download` is specified.
-3. Build or discover the helper. Under Proton, read Elden Ring's executable version.
+3. Build or discover the helper. Under Proton, read Elden Ring's executable version. If the version cannot be determined, warn and continue; a positively detected unsupported version still stops setup.
 4. Discover DXC (`--dxc FILE` or `tools/bin/dxc/bin/x64/dxc.exe`), or download Microsoft's official pinned v1.8.2502 archive. TLS verification and the repository's existing SHA-256 pin are required **before extraction**. Keep `dxcompiler.dll` and `dxil.dll` beside `dxc.exe`. Existing user-supplied tools are trusted local inputs.
 5. Use a native shader compiler, a Windows release shader compiler through an adapter, or build the native compiler from source.
 6. Use native Node for pak-key discovery and the existing `packgen.js` extract/convert/research/pack/replay/shaders/gen stages. Calls to `D3DDisassemble` and the copied game Oodle DLL cross into the selected Proton through the helper. Shader translation, replay verification, generated-data checks and schema comparison remain in place.

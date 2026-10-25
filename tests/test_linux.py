@@ -210,6 +210,27 @@ class Fixture(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'offline'):
             play.profile_text(self.profile, self.root)
 
+    def test_er_version_supported_with_proton_diagnostics(self):
+        with patch('install.run', return_value='Proton: preparing prefix\n2.7.2.0\n'), contextlib.redirect_stdout(io.StringIO()) as output:
+            install.check_er_version(['helper', 'version'], {}, None)
+        self.assertNotIn('WARNING', output.getvalue())
+
+    def test_er_version_unknown_warns_and_continues(self):
+        for result in ['', 'cannot read executable version', '0.0.0.0']:
+            with self.subTest(result=result), patch('install.run', return_value=result), contextlib.redirect_stdout(io.StringIO()) as output:
+                install.check_er_version(['helper', 'version'], {}, None)
+                self.assertIn('Continuing setup', output.getvalue())
+
+    def test_er_version_probe_failure_warns_and_continues(self):
+        for error in [RuntimeError('helper exited 1'), OSError('Proton unavailable')]:
+            with self.subTest(error=error), patch('install.run', side_effect=error), contextlib.redirect_stdout(io.StringIO()) as output:
+                install.check_er_version(['helper', 'version'], {}, None)
+                self.assertIn('Unable to determine', output.getvalue())
+
+    def test_er_version_known_unsupported_still_stops(self):
+        with patch('install.run', return_value='2.6.0.0\n'), self.assertRaisesRegex(ValueError, 'unsupported Elden Ring version 2.6.0.0'):
+            install.check_er_version(['helper', 'version'], {}, None)
+
     def test_me3_versions(self):
         for version in ['me3 0.13.0', 'me3 0.14.1', 'me3 1.0.0']:
             self.assertTrue(play.version_ok(version), version)
