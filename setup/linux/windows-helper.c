@@ -72,7 +72,7 @@ static int disasm(const wchar_t *dir) {
     HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
     Dis dis = module ? (Dis)(void *)GetProcAddress(module, "D3DDisassemble") : NULL;
     if (!dis) return fail(L"D3DDisassemble unavailable in d3dcompiler_47.dll");
-    wchar_t pattern[32768], input[32768], output[32768];
+    wchar_t pattern[32768], input[32768], output[32768], hexoutput[32768];
     if (wcslen(dir) + 16 >= 32768) return fail(L"path too long");
     swprintf(pattern, 32768, L"%ls\\*.bin", dir);
     WIN32_FIND_DATAW entry;
@@ -81,7 +81,7 @@ static int disasm(const wchar_t *dir) {
     int result = 0;
     do {
         if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        if (wcslen(dir) + wcslen(entry.cFileName) + 2 >= 32768) { result = 1; break; }
+        if (wcslen(dir) + wcslen(entry.cFileName) + 16 >= 32768) { result = 1; break; }
         swprintf(input, 32768, L"%ls\\%ls", dir, entry.cFileName);
         wcscpy(output, input); wcscpy(output + wcslen(output) - 4, L".asm");
         if (GetFileAttributesW(output) != INVALID_FILE_ATTRIBUTES) continue;
@@ -89,12 +89,21 @@ static int disasm(const wchar_t *dir) {
         unsigned char *data = read_file(input, &size);
         ID3DBlob *blob = NULL;
         HRESULT hr = data ? dis(data, size, 0, NULL, &blob) : E_FAIL;
+        ID3DBlob *hex = NULL;
+        HRESULT hexhr = data ? dis(data, size, D3D_DISASM_PRINT_HEX_LITERALS, NULL, &hex) : E_FAIL;
         free(data);
+        if (FAILED(hexhr) || !hex) { if (blob) ID3D10Blob_Release(blob); result = fail(L"hex literal disassembly failed"); break; }
         if (FAILED(hr) || !blob) { fwprintf(stderr, L"%ls: D3DDisassemble HRESULT %08lx\n", input, (unsigned long)hr); result = 1; break; }
         size_t n = ID3D10Blob_GetBufferSize(blob);
         const char *text = ID3D10Blob_GetBufferPointer(blob);
         if (n && text[n-1] == '\0') n--;
-        result = write_file(output, text, n);
+        wcscpy(hexoutput, input); wcscpy(hexoutput + wcslen(hexoutput) - 4, L".hex.asm");
+        size_t hn = ID3D10Blob_GetBufferSize(hex);
+        const char *ht = ID3D10Blob_GetBufferPointer(hex);
+        if (hn && ht[hn-1] == '\0') hn--;
+        result = write_file(hexoutput, ht, hn);
+        if (!result) result = write_file(output, text, n);
+        ID3D10Blob_Release(hex);
         ID3D10Blob_Release(blob);
         if (result) break;
     } while (FindNextFileW(search, &entry));
