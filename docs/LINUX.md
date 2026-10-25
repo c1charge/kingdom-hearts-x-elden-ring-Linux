@@ -69,6 +69,10 @@ All commands use argument arrays, not shell interpolation. Adapters translate ab
 
 ### Resume and errors
 
+Replay preserves original inputs that its recipes overwrite, using `build/packgen/replay_inputs` (and a separate overlay snapshot). Retries and `apply --check` use that generation's snapshot rather than applying recipes twice to transformed output. All recipe hashes must pass before live pack or auxiliary files are copied. A filesystem error during copying can still leave partial output; retry uses the preserved inputs. Running an upstream extraction/conversion/research/pack stage invalidates snapshots for the new generation.
+
+If an older setup already left partially replayed files, run your original setup command once with `--rebuild-pack` after updating. The fix cannot reconstruct original inputs from those previously transformed files. Recipe changes or damaged snapshots stop with a rebuild instruction; expected hashes are never rewritten.
+
 Rerun the same command after fixing the reported error. The existing `build/packgen/done_steps.json` journal is passed back through `--resume`; failed steps are not marked complete. Linux setup also records game input paths, sizes and timestamps in `build/linux-install.json`. Changing game inputs requires a fresh mod folder to avoid reusing stale extracted caches. In-place game updates are deliberately not handled by silently accepting old outputs.
 
 On upgrading from an older Linux setup, or when the compiler DLL, helper, Proton executable, or setup overrides change, setup automatically deletes only cached shader `.asm` files and invalidates pack/replay/shaders/gen completion. Extracted data, bytecode, completed extraction/conversion/research steps, settings, and saves are retained. The selected disassembler identity is recorded in `build/linux-disassembler.json`. This repairs the earlier case where outfit stages recorded completion despite untranslated materials.
@@ -127,7 +131,7 @@ No owned games, downloads, Proton or graphical session are needed:
 
 ```bash
 python3 -m unittest discover -s tests -v
-node --test tests/windows_api.test.js
+node --test tests/*.test.js
 node release-tools/scan.js
 ```
 

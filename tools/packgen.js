@@ -298,6 +298,11 @@ for (const s of STEPS) {
   if (!started) { if (s.id !== from) continue; started = true; }
   if (only && !only.has(s.id)) continue;
   if (resume && done.has(s.id)) { console.log(`packgen ${s.phase} ${s.id} ... done before (--resume)`); continue; }
+  // Executing an upstream stage starts a new input generation. Resume of replay alone
+  // retains its original-input snapshots, including after validation or copy failures.
+  if (['extract', 'convert', 'research', 'pack'].includes(s.phase)) {
+    for (const dir of ['replay_inputs', 'replay_inputs_overlays']) fs.rmSync(path.join(ROOT, 'build', 'packgen', dir), { recursive: true, force: true });
+  }
   done.delete(s.id); saveDone();
   const t = Date.now();
   process.stdout.write(`packgen ${s.phase} ${s.id} ... `);

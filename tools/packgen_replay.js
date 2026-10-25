@@ -40,7 +40,52 @@ const doVerify = args.includes('verify');
 const doPrepare = args.includes('prepare') || (!args.includes('apply') && !doVerify);
 const doApply = args.includes('apply') || (!args.includes('prepare') && !doVerify);
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
-const corpusPath = (id) => { const i = id.indexOf(':'); const tag = id.slice(0, i), f = id.slice(i + 1); if (tag === 'pack') return path.join(PACK, f); if (tag === 'scratch') return path.join(SCRATCH, f); if (tag === 'root') return path.join(ROOT, f); if (tag === 'out') return path.join(OUT, f); /* (v2) a file this replay made before */ throw new Error('corpus: ' + id); };
+const originalCorpusPath = (id) => { const i = id.indexOf(':'); const tag = id.slice(0, i), f = id.slice(i + 1); if (tag === 'pack') return path.join(PACK, f); if (tag === 'scratch') return path.join(SCRATCH, f); if (tag === 'root') return path.join(ROOT, f); if (tag === 'out') return path.join(OUT, f); /* (v2) a file this replay made before */ throw new Error('corpus: ' + id); };
+
+// Replay recipes may read files they replace. Keep those original inputs across retries;
+// never apply a second transformation to an already replayed file.
+const INPUTS = path.join(ROOT, 'build', 'packgen', OVERLAYS ? 'replay_inputs_overlays' : 'replay_inputs');
+let frozenInputs = new Map();
+const stagedAuxiliary = new Map();
+const corpusPath = (id) => stagedAuxiliary.get(id) || frozenInputs.get(id) || originalCorpusPath(id);
+function freezeInputs(files) {
+  const identity = sha(Buffer.concat(files.map(f => Buffer.concat([Buffer.from(f + '\0'), fs.readFileSync(path.join(DIR, f))]))));
+  const manifest = path.join(INPUTS, 'manifest.json');
+  if (fs.existsSync(manifest)) {
+    const saved = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (saved.recipes !== identity) throw new Error('replay recipes changed: rerun setup with --rebuild-pack to regenerate original inputs');
+    for (const [id, item] of Object.entries(saved.inputs)) {
+      const file = path.join(INPUTS, item.file);
+      if (!fs.existsSync(file) || sha(fs.readFileSync(file)) !== item.sha256) throw new Error('replay input snapshot damaged: ' + id + '; rerun setup with --rebuild-pack');
+      frozenInputs.set(id, file);
+    }
+    return;
+  }
+  const targets = new Set(), sources = new Set();
+  for (const f of files) {
+    const recipe = JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
+    for (const [rel, rec] of Object.entries(recipe.files)) {
+      targets.add(path.resolve(recipe.root === 'aux' ? ROOT : PACK, rel));
+      for (const id of rec.corpus || []) sources.add(id);
+      if (rec.kind === 'copy') sources.add(rec.from);
+    }
+  }
+  fs.rmSync(INPUTS, { recursive: true, force: true });
+  fs.mkdirSync(INPUTS, { recursive: true });
+  const inputs = {};
+  for (const id of [...sources].sort()) {
+    const source = originalCorpusPath(id);
+    if (!targets.has(path.resolve(source)) || !fs.existsSync(source)) continue;
+    const file = String(Object.keys(inputs).length) + '.input';
+    const data = fs.readFileSync(source);
+    fs.writeFileSync(path.join(INPUTS, file), data);
+    inputs[id] = { file, sha256: sha(data) };
+    frozenInputs.set(id, path.join(INPUTS, file));
+  }
+  const temp = manifest + '.tmp';
+  fs.writeFileSync(temp, JSON.stringify({ recipes: identity, inputs }));
+  fs.renameSync(temp, manifest);
+}
 
 if (!fs.existsSync(DIR)) { console.log('packgen_replay: no recipes (tools/packgen/replay): nothing to do'); process.exit(0); }
 
@@ -73,7 +118,11 @@ if (doApply) {
   const keysOf = (rec) => { if (!rec._keys) { rec._keys = new Map(); for (const id of rec.corpus) (function kw(x) { if (x && typeof x === 'object') for (const k of Object.keys(x)) { rec._keys.set(hkey(k), k); kw(x[k]); } })(corpusJson(id)); } return rec._keys; };
   fs.rmSync(OUT, { recursive: true, force: true });
   let made = 0, bad = 0; const badList = [];
+  const auxiliary = [];
+  const auxOut = OUT + '_aux';
+  fs.rmSync(auxOut, { recursive: true, force: true });
   const files = fs.readdirSync(DIR).filter((x) => RECIPES.test(x)).sort();
+  freezeInputs(files);
   for (const f of files) {
     const { root: recRoot, files: recs } = JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8'));
     for (const [rel, rec] of Object.entries(recs)) {
@@ -100,18 +149,21 @@ if (doApply) {
         else throw new Error('recipe kind ' + rec.kind);
       } catch (e) { bad++; badList.push(`${rel}: ${e.message}`); continue; } finally { delete rec._keys; }
       if (sha(buf) !== rec.sha256) { bad++; badList.push(`${rel}: made, but not the recorded file (SHA-256 differs)`); continue; }
-      // a pack file goes to the staging folder (copied into the pack below); an AUX file (a stream's manifest outside the
-      // pack) straight to its own path
-      const dst = recRoot === 'aux' ? path.join(ROOT, rel) : path.join(OUT, rel); fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.rmSync(dst, { force: true }); fs.writeFileSync(dst, buf); made++;
+      // Stage auxiliary outputs too: neither failures nor --check may modify live inputs.
+      const dst = recRoot === 'aux' ? path.join(auxOut, rel) : path.join(OUT, rel);
+      if (recRoot === 'aux') auxiliary.push([dst, path.join(ROOT, rel)]); fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.rmSync(dst, { force: true }); fs.writeFileSync(dst, buf);
+      if (recRoot === 'aux') stagedAuxiliary.set('root:' + rel, dst);
+      made++;
     }
   }
   console.log(`packgen_replay: ${made} file(s) made and checked, ${bad} failed`);
   for (const l of badList.slice(0, 30)) console.log('   ' + l);
-  if (!check) {
+  if (!check && !bad) {
+    for (const [source, target] of auxiliary) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.rmSync(target, { force: true }); fs.copyFileSync(source, target); }
     (function walk(d, base) { if (!fs.existsSync(d)) return; for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, base); else { const t = path.join(PACK, path.relative(base, p)); fs.mkdirSync(path.dirname(t), { recursive: true }); fs.rmSync(t, { force: true }); fs.copyFileSync(p, t); } } })(OUT, OUT);
     console.log(`packgen_replay: copied into ${path.relative(ROOT, PACK)}`);
   }
-  if (bad) process.exitCode = 1;
+  if (bad) { console.error('packgen_replay: validation failed; live pack and auxiliary files were not changed'); process.exitCode = 1; }
 }
 
 if (doVerify) {
