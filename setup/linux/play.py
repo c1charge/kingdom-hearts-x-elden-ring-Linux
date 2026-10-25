@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Launch the mod with Windows me3 under an explicitly selected Proton."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import re
 import shutil
 import sys
 import tomllib
-from common import ROOT, atomic_json, context, platform_args, proton_env, run, win_path
+from common import ROOT, atomic_json, context, platform_args, proton_env, run, win_path, executable
 from install import pe64
 
 
@@ -23,6 +24,40 @@ def parser():
 def version_ok(output):
     match = re.search(r'(?mi)^me3(?:\.exe)?[ \t]+v?(\d+)\.(\d+)\.(\d+)[ \t]*$', output)
     return bool(match and tuple(map(int, match.groups())) >= (0, 13, 0))
+
+
+def check_me3_version(ctx, me3, env, logs):
+    log = logs / 'linux-launch.log'
+    version = run([ctx['proton'], 'run', win_path(me3), '--version'], env=env, log=log)
+    if version_ok(version):
+        return
+    # If me3 printed a version, honor the result. Do not run a fallback to evade
+    # an old/prerelease version; fallback is only for missing console output.
+    if re.search(r'(?mi)^me3(?:\.exe)?[ \t]+', version):
+        raise ValueError('me3 version is prerelease, older than 0.13.0, or unrecognized; refusing launch')
+    source = ROOT / 'setup/linux/capture-version.c'
+    helper = ROOT / 'tools/bin/kh-capture-version.exe'
+    stamp = helper.with_suffix('.source-sha256')
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if not helper.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
+        compiler = executable('x86_64-w64-mingw32-gcc')
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        run([compiler, '-O2', '-Wall', '-Wextra', '-municode', source, '-o', helper], log=log)
+        pe64(helper)
+        stamp.write_text(digest + '\n')
+    pe64(helper)
+    logs.mkdir(parents=True, exist_ok=True)
+    report = logs / 'me3-version.txt'
+    if report.is_symlink():
+        raise ValueError('refusing symlink for me3 version report')
+    report.unlink(missing_ok=True)
+    run([ctx['proton'], 'run', win_path(helper), win_path(me3), win_path(report)], env=env, log=log)
+    if not report.is_file():
+        raise ValueError('Proton produced no me3 version report; inspect er/logs/linux-launch.log')
+    version = report.read_text(encoding='utf-8-sig', errors='replace')
+    if not version_ok(version):
+        raise ValueError('me3 version report is unknown, prerelease, or older than 0.13.0; inspect er/logs/me3-version.txt; refusing launch')
+    print('Verified ' + version.strip())
 
 
 def profile_text(source, root=ROOT):
@@ -121,9 +156,7 @@ def main(argv=None):
             continue
     if not steam_running:
         raise ValueError('Start native Steam and sign in before launching the mod')
-    version = run([ctx['proton'], 'run', win_path(me3), '--version'], env=env, log=logs / 'linux-launch.log')
-    if not version_ok(version):
-        raise ValueError('me3 version is unknown, prerelease, or older than 0.13.0; refusing launch to protect normal saves')
+    check_me3_version(ctx, me3, env, logs)
     for output in [profile, config_file]:
         if output.is_symlink():
             raise ValueError(f'refusing to overwrite symlink: {output}')

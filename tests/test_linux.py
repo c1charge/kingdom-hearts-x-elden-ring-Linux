@@ -257,6 +257,53 @@ class Fixture(unittest.TestCase):
         with patch('install.run', return_value='2.6.0.0\n'), self.assertRaisesRegex(ValueError, 'unsupported Elden Ring version 2.6.0.0'):
             install.check_er_version(['helper', 'version'], {}, None)
 
+    def prepare_capture_helper(self):
+        source = touch(self.root / 'setup/linux/capture-version.c', b'fixture capture source')
+        helper = pe(self.root / 'tools/bin/kh-capture-version.exe')
+        helper.with_suffix('.source-sha256').write_text(hashlib.sha256(source.read_bytes()).hexdigest())
+        return helper
+
+    def test_me3_silent_console_uses_fresh_version_report(self):
+        helper = self.prepare_capture_helper()
+        logs = self.root / 'er/logs'
+        report = touch(logs / 'me3-version.txt', b'me3 0.12.0')
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            if common.win_path(helper) in command:
+                self.assertFalse(report.exists())
+                report.write_text('me3 0.13.0\r\n')
+            return 'ProtonFixes WARN: Skipping fix execution\n'
+        with patch.object(play, 'ROOT', self.root), patch('play.run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            play.check_me3_version(self.ctx(), self.base / 'me3.exe', {}, logs)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[-1][-1], common.win_path(report))
+        self.assertFalse(any('launch' in cmd for cmd in calls))
+
+    def test_me3_visible_old_version_does_not_use_fallback(self):
+        with patch('play.run', return_value='me3 0.12.0\n') as mocked, self.assertRaisesRegex(ValueError, 'refusing launch'):
+            play.check_me3_version(self.ctx(), self.base / 'me3.exe', {}, self.root / 'er/logs')
+        self.assertEqual(mocked.call_count, 1)
+
+    def test_me3_report_old_prerelease_and_unknown_still_rejected(self):
+        helper = self.prepare_capture_helper()
+        logs = self.root / 'er/logs'
+        for version in ['me3 0.12.0', 'me3 0.13.0-beta.1', '', 'Proton warning']:
+            def run(command, **kwargs):
+                if common.win_path(helper) in command:
+                    (logs / 'me3-version.txt').write_text(version)
+                return ''
+            with self.subTest(version=version), patch.object(play, 'ROOT', self.root), patch('play.run', side_effect=run), self.assertRaisesRegex(ValueError, 'refusing launch'):
+                play.check_me3_version(self.ctx(), self.base / 'me3.exe', {}, logs)
+
+    def test_me3_missing_report_cannot_use_stale_success(self):
+        self.prepare_capture_helper()
+        logs = self.root / 'er/logs'
+        report = touch(logs / 'me3-version.txt', b'me3 0.13.0')
+        with patch.object(play, 'ROOT', self.root), patch('play.run', return_value=''), self.assertRaisesRegex(ValueError, 'no me3 version report'):
+            play.check_me3_version(self.ctx(), self.base / 'me3.exe', {}, logs)
+        self.assertFalse(report.exists())
+
     def test_me3_versions(self):
         for version in ['me3 0.13.0', 'me3 0.14.1', 'me3 1.0.0']:
             self.assertTrue(play.version_ok(version), version)
