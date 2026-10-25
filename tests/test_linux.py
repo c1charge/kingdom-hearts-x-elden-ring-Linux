@@ -313,6 +313,7 @@ class Fixture(unittest.TestCase):
         touch(self.root / 'setup/templates/kh-er.ini')
         before = {p: p.read_bytes() for root in [self.er, self.kh] for p in root.rglob('*') if p.is_file()}
         fail_pack = True
+        probe_ok = False
         commands = []
         def fake_run(command, **kwargs):
             nonlocal fail_pack
@@ -321,6 +322,10 @@ class Fixture(unittest.TestCase):
                 return '24.19.0\n'
             if 'version' in cmd:
                 return '2.7.2.0\n'
+            if 'probe' in cmd:
+                if not probe_ok:
+                    return 'ps_5_0\ndcl_input_ps v0.xy\n'
+                return 'KH_COMPILER_PATH=' + common.win_path(dxc.parent / 'dxcompiler.dll') + '\n// TEXCOORD 0 xy 0 NONE float xy\n// SV_Position 0 xyzw 1 POS float xy\n'
             if 'tools/pak_key.js' in cmd:
                 common.atomic_json(self.root / 'audit/triage/pak_key.json', {'key_file_offset': 42, 'verified_paks': 1, 'total_paks': 1})
             if 'tools/packgen.js' in cmd and 'extract' in cmd:
@@ -336,6 +341,11 @@ class Fixture(unittest.TestCase):
             return ''
         args = self.args() + ['--helper', str(helper), '--dxc', str(dxc), '--shaderc', str(shaderc)]
         with patch.object(install, 'ROOT', self.root), patch('install.run', side_effect=fake_run), patch('install.shutil.disk_usage', return_value=type('Space', (), {'free': 100 * 1024**3})()), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'translator-compatible input signatures'):
+                install.main(args)
+            self.assertFalse(any('tools/packgen.js' in c or 'tools/pak_key.js' in c for c in commands))
+            self.assertFalse((self.root / 'build/linux-install.json').exists())
+            probe_ok = True
             with self.assertRaisesRegex(RuntimeError, 'converter failure'):
                 install.main(args)
             self.assertEqual(json.loads((self.root / 'build/linux-install.json').read_text())['status'], 'in-progress')
@@ -346,6 +356,61 @@ class Fixture(unittest.TestCase):
         self.assertIn('--resume', pack_runs[1])
         self.assertTrue(any('selfcheck' in c for c in commands))
         self.assertEqual(before, {p: p.read_bytes() for root in [self.er, self.kh] for p in root.rglob('*') if p.is_file()})
+
+    def test_setup_override_preserves_other_dlls_and_does_not_change_parent(self):
+        original = 'dxgi=b;d3dcompiler_47,winhttp=b;dinput8=n'
+        self.assertEqual(install.setup_overrides(original), 'dxgi=b;winhttp=b;dinput8=n;d3dcompiler_47=n,b')
+        self.assertEqual(install.setup_overrides('D3DCOMPILER_47.dll=b'), 'd3dcompiler_47=n,b')
+        with patch.dict(os.environ, {'WINEDLLOVERRIDES': original}):
+            install.setup_overrides(os.environ['WINEDLLOVERRIDES'])
+            self.assertEqual(os.environ['WINEDLLOVERRIDES'], original)
+
+    def test_probe_checks_actual_signature_format_and_dll_identity(self):
+        dll = touch(self.base / 'compiler.dll', b'compiler fixture')
+        helper = touch(self.base / 'helper.exe', b'helper fixture')
+        output = 'KH_COMPILER_PATH=' + common.win_path(dll) + '\n// TEXCOORD 0 xy 0 NONE float xy\n// SV_Position 0 xyzw 1 POS float xy\n'
+        with patch('install.run', return_value=output):
+            identity = install.probe_disassembler([], helper, {'WINEDLLOVERRIDES': 'd3dcompiler_47=n,b'}, self.ctx(), None)
+        self.assertEqual(identity['dll_sha256'], hashlib.sha256(dll.read_bytes()).hexdigest())
+        for bad in ['ps_5_0\ndcl_input_ps v0.xy', '// TEXCOORD 0 xy 0 NONE float xy']:
+            with patch('install.run', return_value=bad), self.assertRaisesRegex(ValueError, 'protontricks 1245620 d3dcompiler_47'):
+                install.probe_disassembler([], helper, {}, self.ctx(), None)
+
+    def test_probe_failure_gives_prefix_specific_remediation(self):
+        with patch('install.run', side_effect=RuntimeError('export missing')), self.assertRaisesRegex(ValueError, str(self.prefix)):
+            install.probe_disassembler([], 'helper.exe', {}, self.ctx(), None)
+
+    def test_shader_cache_change_invalidates_consumers_but_preserves_sources(self):
+        journal = self.root / 'build/packgen/done_steps.json'
+        common.atomic_json(journal, {'steps': ['extract', 'convert', 'reflection', 'outfits', 'shaders', 'gen-port']})
+        for folder in ['char_shaders', 'char_shaders_outfit/caribbean', 'char_shaders_own/caribbean_real', 'vfx_shaders']:
+            touch(self.root / 'build/cache' / folder / 'shader.asm', b'old assembly')
+            touch(self.root / 'build/cache' / folder / 'shader.bin', b'bytecode')
+        touch(self.root / 'build/cache/other/keep.asm', b'unrelated')
+        touch(self.root / 'build/packgen/pack_done.json')
+        touch(self.root / 'build/gen/rust_runtime/khg_schemas.rs')
+        listing = 'extract extract\nconvert convert\nresearch reflection\npack outfits\nshaders shaders\ngen gen-port\n'
+        identity = {'dll_sha256': 'new'}
+        with patch('install.run', return_value=listing), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(install.refresh_shader_cache(self.root, identity, 'node', {}, None))
+        self.assertEqual(json.loads(journal.read_text())['steps'], ['extract', 'convert', 'reflection'])
+        self.assertEqual(len(list((self.root / 'build/cache').rglob('*.bin'))), 4)
+        self.assertEqual(list((self.root / 'build/cache').rglob('*.asm')), [self.root / 'build/cache/other/keep.asm'])
+        self.assertFalse((self.root / 'build/packgen/pack_done.json').exists())
+        self.assertFalse((self.root / 'build/gen/rust_runtime/khg_schemas.rs').exists())
+        with patch('install.run', side_effect=AssertionError('unchanged compiler must retain resume')):
+            self.assertFalse(install.refresh_shader_cache(self.root, identity, 'node', {}, None))
+        with patch('install.run', return_value=listing), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(install.refresh_shader_cache(self.root, {'dll_sha256': 'updated'}, 'node', {}, None))
+
+    def test_helper_source_change_requires_rebuild(self):
+        touch(self.root / 'setup/linux/windows-helper.c', b'new source')
+        helper = touch(self.root / 'tools/bin/kh-windows-helper.exe')
+        self.assertTrue(install.helper_needs_build(self.root))
+        helper.with_suffix('.source-sha256').write_text(install.helper_source_hash(self.root))
+        self.assertFalse(install.helper_needs_build(self.root))
+        (self.root / 'setup/linux/windows-helper.c').write_text('updated source')
+        self.assertTrue(install.helper_needs_build(self.root))
 
     def test_cli_wrappers_end_to_end(self):
         root = Path(__file__).resolve().parents[1]

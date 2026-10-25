@@ -13,7 +13,7 @@ These additional entry points target Nobara/Fedora, native Steam, and installed 
 - Windows me3 **0.13.0 or newer**, from the [official me3 releases](https://github.com/garyttierney/me3/releases). Extract the **whole Windows distribution**, keeping `me3.exe`, `me3-launcher.exe`, `me3_mod_host.dll`, and its other files together. This launcher runs that distribution under Proton; it does not use the native Linux me3 CLI.
 - `x86_64-w64-mingw32-gcc` to build the small open-source API helper, or an already built helper supplied with `--helper`. On Fedora the relevant compiler package is `mingw64-gcc`. A package manager can install prerequisites if your machine lacks them; these scripts never invoke sudo, install system packages, or require root. A helper built on another machine is a no-root alternative.
 - Rust stable/Cargo only when a native `kh-shaderc` must be built from source. The Windows release's `tools/bin/kh-shaderc.exe` is supported through Proton, so a full release does not require Rust.
-- Protontricks is useful for prefix diagnostics; it is not a mandatory installer dependency and is not automatically invoked.
+- Protontricks is needed if the prefix lacks a translator-compatible Microsoft `d3dcompiler_47`. Install it explicitly with `protontricks 1245620 d3dcompiler_47`; ensure Protontricks targets the same prefix passed to setup. Setup never invokes Protontricks or downloads that DLL automatically.
 
 No game assets, extracted data, game executables, Oodle DLLs or keys are distributed. Licenses and attribution remain in [LEGAL.md](../LEGAL.md). All extraction reads your own installations; outputs stay in the mod tree.
 
@@ -57,7 +57,7 @@ bash setup-linux.sh \
 
 1. Discover games, Steam, Proton and prefix. Check Windows mod artifacts and loader version marker.
 2. Check native Node/npm. Install locked npm dependencies if missing, unless `--no-download` is specified.
-3. Build or discover the helper. Under Proton, read Elden Ring's executable version. If the version cannot be determined, warn and continue; a positively detected unsupported version still stops setup.
+3. Build or refresh the helper when its source changes. Under Proton, compile and disassemble a tiny project-authored shader and require the exact input-signature format consumed by the translators. If the check fails, stop early with prefix-specific Protontricks instructions. Then read Elden Ring's executable version. If the version cannot be determined, warn and continue; a positively detected unsupported version still stops setup.
 4. Discover DXC (`--dxc FILE` or `tools/bin/dxc/bin/x64/dxc.exe`), or download Microsoft's official pinned v1.8.2502 archive. TLS verification and the repository's existing SHA-256 pin are required **before extraction**. Keep `dxcompiler.dll` and `dxil.dll` beside `dxc.exe`. Existing user-supplied tools are trusted local inputs.
 5. Use a native shader compiler, a Windows release shader compiler through an adapter, or build the native compiler from source.
 6. Use native Node for pak-key discovery and the existing `packgen.js` extract/convert/research/pack/replay/shaders/gen stages. Calls to `D3DDisassemble` and the copied game Oodle DLL cross into the selected Proton through the helper. Shader translation, replay verification, generated-data checks and schema comparison remain in place.
@@ -70,6 +70,8 @@ All commands use argument arrays, not shell interpolation. Adapters translate ab
 ### Resume and errors
 
 Rerun the same command after fixing the reported error. The existing `build/packgen/done_steps.json` journal is passed back through `--resume`; failed steps are not marked complete. Linux setup also records game input paths, sizes and timestamps in `build/linux-install.json`. Changing game inputs requires a fresh mod folder to avoid reusing stale extracted caches. In-place game updates are deliberately not handled by silently accepting old outputs.
+
+On upgrading from an older Linux setup, or when the compiler DLL, helper, Proton executable, or setup overrides change, setup automatically deletes only cached shader `.asm` files and invalidates pack/replay/shaders/gen completion. Extracted data, bytecode, completed extraction/conversion/research steps, settings, and saves are retained. The selected disassembler identity is recorded in `build/linux-disassembler.json`. This repairs the earlier case where outfit stages recorded completion despite untranslated materials.
 
 `--rebuild-pack` reruns packgen phases and generated tables; it does not erase all converter caches and is not a workaround for changed game inputs. `--workers N` controls pipeline workers and native compiler build parallelism. No writes go into original game directories; output aliases into those directories are rejected.
 
@@ -95,9 +97,17 @@ The dedicated game save is inside the Elden Ring prefix, normally `pfx/drive_c/u
 
 ## DLL overrides and troubleshooting
 
-There is no evidence yet that extra injection overrides are needed. me3 uses its own injection path; do not blindly add `dinput8`, `winhttp`, `dxgi` or `d3d12` overrides. Existing `WINEDLLOVERRIDES` is inherited. `--dll-overrides '...'` can override it **for this process tree only** and is never written to the prefix registry.
+There is no evidence yet that extra injection overrides are needed. me3 uses its own injection path; do not blindly add `dinput8`, `winhttp`, `dxgi` or `d3d12` overrides.
 
-For a DXBC disassembly failure, inspect the logged `D3DDisassemble` error and whether the chosen Proton supplies `d3dcompiler_47`. If you have legally installed Microsoft's native compiler in this prefix (for example with Protontricks, app 1245620), you can test `--dll-overrides 'd3dcompiler_47=n,b'`. This is an unverified troubleshooting experiment, not a requirement or an automated fix. A failed disassembly stops the pipeline; no placeholder assembly is accepted.
+Linux **setup** adds `d3dcompiler_47=n,b` to its child-process environment and preserves unrelated DLL overrides. This selects a native compiler when installed. The early preflight stops if fallback Wine disassembly lacks the input-signature format needed by the translator. It does not alter the prefix registry, normal Steam launches, or the launcher environment. `--dll-overrides '...'` still selects other process-local overrides, but setup always sets the compiler entry to `n,b`.
+
+A user confirmed that installing Microsoft's native compiler fixed widespread `NOT TRANSLATED: input v0` failures under Proton. To install it yourself:
+
+```bash
+protontricks 1245620 d3dcompiler_47
+```
+
+For a custom `--prefix`, configure Protontricks to target that same app prefix; do not install the DLL into a different prefix. Rerun the original setup command afterward. The compiler override and shader cache repair are now automatic: there is no need to add `--dll-overrides` or delete assembly manually. Microsoft DLLs are not bundled. The new preflight and automatic repair have automated regression coverage, but their actual execution under Proton remains unverified on the development cloud machine.
 
 For Oodle errors, check that Elden Ring's own `Game/oo2core_6_win64.dll` exists and that the selected prefix can load 64-bit Windows DLLs. The helper uses a copy under `build/`; never download that game DLL from third-party sites.
 
@@ -121,6 +131,6 @@ node --test tests/windows_api.test.js
 node release-tools/scan.js
 ```
 
-Tests use temporary Steam libraries and fake files to verify discovery, escaped paths, argument handling, missing dependencies, Proton ordering, path conversion, save safety, generated profiles, checksum rejection, dry-run side-effect boundaries, and a failed installation followed by resume. They do not emulate or prove Windows API behavior. `--dry-run` inspects the selected filesystem and prints the plan without downloads, writes, version subprocesses or launches; missing games/Steam/Proton/prefix still produce useful errors. Installer plans list missing build dependencies and Windows artifacts.
+Tests use temporary Steam libraries and fake files to verify discovery, escaped paths, argument handling, missing dependencies, Proton ordering, path conversion, save safety, generated profiles, checksum rejection, disassembler preflight validation, helper rebuild detection, compiler-specific cache invalidation, preservation of unrelated DLL overrides, dry-run side-effect boundaries, and a failed installation followed by resume. They do not emulate or prove Windows API behavior. `--dry-run` inspects the selected filesystem and prints the plan without downloads, writes, version subprocesses or launches; missing games/Steam/Proton/prefix still produce useful errors. Installer plans list missing build dependencies and Windows artifacts.
 
 The Windows PowerShell disassembly branch is covered by an argument-level regression test. Full Windows setup/release execution remains untested on this Linux machine. No combat or mod runtime logic was changed.

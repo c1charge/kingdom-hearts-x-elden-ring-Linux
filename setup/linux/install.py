@@ -11,8 +11,8 @@ import stat
 import sys
 import urllib.request
 import zipfile
-from common import (ROOT, atomic_json, context, executable, platform_args,
-                    proton_env, run, win_path)
+from common import (ROOT, ER_ID, atomic_json, context, executable, platform_args,
+                    proton_env, run, win_path, linux_path)
 
 PACK_REQUIRED = ['manifest.json', 'sora.glb', 'materials/er/skin.vs.dxil', 'vfx/er/shaders.json',
                  'ui/manifest.json', 'audio/manifest.json', 'party/n_ex001/manifest.json', 'party/n_ex002/manifest.json']
@@ -79,11 +79,82 @@ def download_dxc(destination, pin):
         archive.unlink(missing_ok=True)
 
 
+def helper_source_hash(root):
+    return hashlib.sha256((root / 'setup/linux/windows-helper.c').read_bytes()).hexdigest()
+
+
+def helper_needs_build(root):
+    helper = root / 'tools/bin/kh-windows-helper.exe'
+    stamp = helper.with_suffix('.source-sha256')
+    return (not helper.is_file() or not stamp.is_file()
+            or stamp.read_text().strip() != helper_source_hash(root))
+
+
+def setup_overrides(value):
+    # Replace only the compiler entry; preserve unrelated inherited or explicit overrides.
+    entries = [entry for entry in (value or '').split(';') if entry.strip()]
+    kept = []
+    for entry in entries:
+        names, sep, mode = entry.partition('=')
+        names = [n.strip() for n in names.split(',') if n.strip().lower().removesuffix('.dll') != 'd3dcompiler_47']
+        if names:
+            kept.append(','.join(names) + (sep + mode if sep else ''))
+    return ';'.join([*kept, 'd3dcompiler_47=n,b'])
+
+
+def probe_disassembler(bridge, helper, env, ctx, log):
+    fix = (f'Install Microsoft d3dcompiler_47 in the selected Elden Ring prefix: '
+           f'protontricks {ER_ID} d3dcompiler_47 (ensure Protontricks targets {ctx["prefix"]}). '
+           'Then rerun setup. A custom --helper must be rebuilt from current windows-helper.c.')
+    try:
+        output = run([*bridge, helper, 'probe'], env=env, log=log)
+    except (OSError, RuntimeError) as error:
+        raise ValueError(f'D3D disassembler preflight failed: {error}. {fix}') from error
+    # Match the semantic-row grammar the material translator actually consumes.
+    rows = re.findall(r'^// (\w+)\s+(\d+)\s+(\w+)\s+(\d+)\s+(\w+)\s+(\w+)\s*(.*?)\s*$', output, re.M)
+    if not any(row[0] == 'TEXCOORD' and row[1] == '0' for row in rows) or not any(row[0] == 'SV_Position' for row in rows):
+        raise ValueError(f'D3D disassembler output lacks translator-compatible input signatures. {fix}')
+    paths = re.findall(r'^KH_COMPILER_PATH=(.+)$', output, re.M)
+    if len(paths) != 1:
+        raise ValueError(f'Disassembler helper did not identify its compiler DLL. {fix}')
+    dll = linux_path(paths[0].strip(), ctx['prefix'])
+    return {'dll_sha256': hashlib.sha256(dll.read_bytes()).hexdigest(),
+            'proton': str(ctx['proton']), 'overrides': env['WINEDLLOVERRIDES'],
+            'helper_sha256': hashlib.sha256(Path(helper).read_bytes()).hexdigest(),
+            'proton_stamp': [ctx['proton'].stat().st_size, ctx['proton'].stat().st_mtime_ns]}
+
+
+def refresh_shader_cache(root, identity, node, env, log):
+    stamp = root / 'build/linux-disassembler.json'
+    previous = json.loads(stamp.read_text()) if stamp.exists() else None
+    journal = root / 'build/packgen/done_steps.json'
+    pack_done = root / 'build/packgen/pack_done.json'
+    cached = any((root / 'build/cache').glob('char_shaders*')) or (root / 'build/cache/vfx_shaders').exists()
+    changed = previous != identity and (previous is not None or journal.exists() or pack_done.exists() or cached)
+    if changed:
+        # Resolve the current registry instead of hardcoding step ids. Keep expensive
+        # extraction, conversion and research; rerun all consumers of shader assembly.
+        listing = run([node, 'tools/packgen.js', '--list'], env=env, log=log)
+        keep = {parts[1] for line in listing.splitlines()
+                if len(parts := line.split()) == 2 and parts[0] in ('extract', 'convert', 'research')}
+        if journal.exists():
+            done = json.loads(journal.read_text())
+            atomic_json(journal, {'steps': [s for s in done['steps'] if s in keep]})
+        for folder in ['char_shaders', 'char_shaders_outfit', 'char_shaders_own', 'vfx_shaders']:
+            for assembly in (root / 'build/cache' / folder).rglob('*.asm'):
+                assembly.unlink()
+        pack_done.unlink(missing_ok=True)
+        (root / 'build/gen/rust_runtime/khg_schemas.rs').unlink(missing_ok=True)
+        print('Disassembler changed or legacy shader cache detected: invalidated shader assembly; rerunning pack/replay/shaders/gen, retaining extraction/conversion/research.')
+    atomic_json(stamp, identity)
+    return changed
+
+
 def requirements(args, root=ROOT):
     commands = ['node']
     if not all((root / 'node_modules' / name / 'package.json').is_file() for name in ['ajv', 'iced-x86', '@wasm-audio-decoders/ogg-vorbis', 'gltf-validator']):
         commands += ['npm']
-    if not args.helper and not (root / 'tools/bin/kh-windows-helper.exe').is_file():
+    if not args.helper and helper_needs_build(root):
         commands += ['x86_64-w64-mingw32-gcc']
     if not args.shaderc and not (root / 'target/release/kh-shaderc').is_file() and not (root / 'tools/bin/kh-shaderc.exe').is_file():
         commands += ['cargo']
@@ -168,6 +239,7 @@ def main(argv=None):
             if target.exists() and target.read_bytes() != (dll_dir / f).read_bytes():
                 raise ValueError(f'{target} already differs; back it up and remove it before importing DLLs')
     env = proton_env(ctx['steam'], ctx['proton'], ctx['prefix'], ctx['er'].parent, args.dll_overrides)
+    env['WINEDLLOVERRIDES'] = setup_overrides(env.get('WINEDLLOVERRIDES'))
     env.update(KH_LINUX_PROTON=str(ctx['proton']), KH_LINUX_PYTHON=sys.executable,
                KH_WINDOWS_HELPER=str(helper), KH_LINUX_DXC=str(dxc), KH_ER_GAME=str(ctx['er'].parent))
     log = ROOT / 'build/packgen/logs/linux-setup.log'
@@ -186,14 +258,18 @@ def main(argv=None):
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not dst.exists():
         shutil.copy2(src, dst)
-    if not helper.is_file():
+    if (not args.helper and helper_needs_build(ROOT)) or not helper.is_file():
         if args.helper:
             raise ValueError(f'--helper missing: {helper}')
         helper.parent.mkdir(parents=True, exist_ok=True)
         run(['x86_64-w64-mingw32-gcc', '-O2', '-Wall', '-Wextra', '-municode',
              ROOT / 'setup/linux/windows-helper.c', '-lversion', '-o', helper], log=log)
+        helper.with_suffix('.source-sha256').write_text(helper_source_hash(ROOT) + '\n')
     pe64(helper)
     bridge = [sys.executable, ROOT / 'setup/linux/bridge.py']
+    disassembler = probe_disassembler(bridge, helper, env, ctx, log)
+    if refresh_shader_cache(ROOT, disassembler, node, env, log):
+        resume = ['--resume'] if done.exists() and not args.rebuild_pack else []
     check_er_version([*bridge, helper, 'version', ctx['er']], env, log)
     if not dxc.is_file():
         if args.dxc or args.no_download:

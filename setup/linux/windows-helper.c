@@ -35,6 +35,35 @@ static int write_file(const wchar_t *file, const void *data, size_t size) {
 static uint32_t be32(const unsigned char *b) {
     return ((uint32_t)b[0]<<24) | ((uint32_t)b[1]<<16) | ((uint32_t)b[2]<<8) | b[3];
 }
+/* Compile only our own tiny shader: no game assets are needed for this preflight. */
+static int probe(void) {
+    typedef HRESULT (WINAPI *Compile)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO *, ID3DInclude *, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob **, ID3DBlob **);
+    typedef HRESULT (WINAPI *Dis)(LPCVOID, SIZE_T, UINT, LPCSTR, ID3DBlob **);
+    HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
+    Compile compile = module ? (Compile)(void *)GetProcAddress(module, "D3DCompile") : NULL;
+    Dis dis = module ? (Dis)(void *)GetProcAddress(module, "D3DDisassemble") : NULL;
+    if (!compile || !dis) return fail(L"d3dcompiler_47 compile/disassemble exports unavailable");
+    const char source[] = "float4 main(float2 uv : TEXCOORD0, float4 pos : SV_Position) : SV_Target { return float4(uv, pos.xy); }";
+    ID3DBlob *code = NULL, *errors = NULL, *assembly = NULL;
+    HRESULT hr = compile(source, sizeof(source)-1, "kh-linux-preflight", NULL, NULL, "main", "ps_5_0", 0, 0, &code, &errors);
+    if (errors) { fwrite(ID3D10Blob_GetBufferPointer(errors), 1, ID3D10Blob_GetBufferSize(errors), stderr); ID3D10Blob_Release(errors); }
+    if (FAILED(hr) || !code) return fail(L"disassembler preflight shader compilation failed");
+    hr = dis(ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), 0, NULL, &assembly);
+    ID3D10Blob_Release(code);
+    if (FAILED(hr) || !assembly) return fail(L"disassembler preflight disassembly failed");
+    wchar_t file[32768]; char utf8[131072];
+    DWORD len = GetModuleFileNameW(module, file, 32768);
+    if (!len || len >= 32768 || !WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), NULL, NULL)) return fail(L"cannot identify loaded compiler");
+    printf("KH_COMPILER_PATH=%s\n", utf8);
+    size_t size = ID3D10Blob_GetBufferSize(assembly);
+    const char *text = ID3D10Blob_GetBufferPointer(assembly);
+    if (size && text[size-1] == 0) size--;
+    fwrite(text, 1, size, stdout);
+    ID3D10Blob_Release(assembly);
+    FreeLibrary(module);
+    return 0;
+}
+
 static int disasm(const wchar_t *dir) {
     typedef HRESULT (WINAPI *Dis)(LPCVOID, SIZE_T, UINT, LPCSTR, ID3DBlob **);
     HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
@@ -120,10 +149,11 @@ static int selfcheck(const wchar_t *mods) {
     return n ? 0 : 1;
 }
 int wmain(int argc, wchar_t **argv) {
+    if (argc == 2 && !wcscmp(argv[1], L"probe")) return probe();
     if (argc == 3 && !wcscmp(argv[1], L"disasm")) return disasm(argv[2]);
     if (argc >= 4 && !wcscmp(argv[1], L"undcx")) return undcx(argc, argv);
     if (argc == 3 && !wcscmp(argv[1], L"version")) return version(argv[2]);
     if (argc == 3 && !wcscmp(argv[1], L"selfcheck")) return selfcheck(argv[2]);
-    fputs("usage: helper disasm DIR | undcx DLL FILE... | version EXE | selfcheck MODS\n", stderr);
+    fputs("usage: helper probe | disasm DIR | undcx DLL FILE... | version EXE | selfcheck MODS\n", stderr);
     return 2;
 }
