@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from common import win_path
 
 
@@ -28,6 +29,13 @@ def main(args):
         env['KH_DXC'] = win_path(env['KH_LINUX_DXC'])
         if env.get('KH_SHADERC_HLSL_DIR', '').startswith('/'):
             env['KH_SHADERC_HLSL_DIR'] = win_path(env['KH_SHADERC_HLSL_DIR'])
+    # Proton truncates/removes steam-APPID.log during startup. Parallel shader
+    # jobs must not share that path, even though they intentionally share a prefix.
+    if env.get('PROTON_LOG', '0') not in ('', '0'):
+        base = Path(env.get('PROTON_LOG_DIR') or Path.home()).expanduser().resolve() / 'proton-tools'
+        base.mkdir(parents=True, exist_ok=True)
+        env['PROTON_LOG_DIR'] = tempfile.mkdtemp(prefix='tool-', dir=base)
+        print('Proton tool logs: ' + env['PROTON_LOG_DIR'], file=sys.stderr, flush=True)
     proc = subprocess.run(command(str(Path(exe).resolve()), rest, env), env=env)
     return proc.returncode if proc.returncode >= 0 else 128 - proc.returncode
 

@@ -132,6 +132,32 @@ class Fixture(unittest.TestCase):
         proton = self.proton_at(extra / 'GE-Proton11-1')
         self.assertEqual(common.protons([], [], extra=[str(extra)]), [proton])
 
+    def test_concurrent_proton_tools_have_isolated_log_files(self):
+        from concurrent.futures import ThreadPoolExecutor
+        fake_proton = self.base / 'fake proton'
+        fake_proton.write_text('#!' + sys.executable + '\n'
+            'import os, pathlib, time\n'
+            'folder=pathlib.Path(os.environ["PROTON_LOG_DIR"])\n'
+            'assert os.environ["STEAM_COMPAT_DATA_PATH"]\n'
+            'with (folder/"steam-1245620.log").open("x") as f: f.write("diagnostic")\n'
+            'time.sleep(0.05)\n')
+        fake_proton.chmod(0o755)
+        log_base = self.base / 'logs with spaces'
+        env = dict(os.environ, KH_LINUX_PROTON=str(fake_proton),
+                   STEAM_COMPAT_DATA_PATH=str(self.prefix), PROTON_LOG='1', PROTON_LOG_DIR=str(log_base))
+        cmd = [sys.executable, str(Path(bridge.__file__)), str(self.base / 'shaderc.exe')]
+        def invoke(_):
+            return subprocess.run(cmd, env=env, capture_output=True, text=True)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(invoke, range(6)))
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        logs = list((log_base / 'proton-tools').glob('tool-*/steam-1245620.log'))
+        self.assertEqual(len(logs), 6)
+        self.assertTrue(all(log.read_text() == 'diagnostic' for log in logs))
+        self.assertFalse((log_base / 'steam-1245620.log').exists())
+        self.assertEqual(env['PROTON_LOG_DIR'], str(log_base))
+
     def test_invalid_proton(self):
         with self.assertRaisesRegex(ValueError, 'executable'):
             common.select_proton(self.base / 'missing', [], [])
