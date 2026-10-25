@@ -1,6 +1,6 @@
 # Linux compatibility audit
 
-Audit before implementation, 2026-10-25. The Windows installer remains the reference workflow.
+Initial audit before implementation, 2026-10-25; updated after user-reported Proton testing on the same date. The Windows installer remains the reference workflow.
 
 | Area | Existing boundary | Linux change |
 | --- | --- | --- |
@@ -15,10 +15,14 @@ Audit before implementation, 2026-10-25. The Windows installer remains the refer
 | Release packaging | Windows Node SEA, PowerShell archive commands and MSVC | Windows release builder retained; Linux consumes its Windows artifacts |
 | Development/research utilities | `tools/lib/cl.js` discovers Visual Studio and invokes `cmd.exe` | Not part of the normal asset pipeline; remains Windows-only |
 
-Upstream me3 v0.13.0 source (commit 989b522214e39c83d701f4182c4f0a86ad79a30a) was consulted: `crates/cli/src/commands/launch.rs` accepts `--exe`, `--profile`, `--savefile`; `start_online` defaults to false. Its native Linux CLI also exists, but selects Proton from Steam's configuration. Our explicit Proton override uses the Windows me3 distribution inside that Proton instead. This route, Steam IPC, DLL injection and D3D12 hooks need real-game testing. Do not describe dry-run or DLL self-check success as successful injection.
+Upstream me3 v0.13.0 source (commit 989b522214e39c83d701f4182c4f0a86ad79a30a) was consulted: `crates/cli/src/commands/launch.rs` accepts `--exe`, `--profile`, `--savefile`; `start_online` defaults to false. Its native Linux CLI also exists, but selects Proton from Steam's configuration. Our explicit Proton override uses the Windows me3 distribution inside that Proton instead. A user subsequently reported successful setup and launch through this route on Nobara with native Steam and Proton-GE. Detailed injection logs, D3D12 rendering coverage and gameplay checks were not separately reported. Dry-run or DLL self-check success alone must still not be described as successful injection.
 
-Remaining blockers to full validation here: no owned games, no Steam/Proton or graphical session, no Windows mod DLLs/pack, and less than the documented 80 GB working space. Case sensitivity and paths embedded in research recipes may reveal further data-dependent issues. Keep failures visible rather than skipping validation or rewriting assets.
+Limitations of validation on the cloud development machine (distinct from the user's successful Proton testing): no owned games, no Steam/Proton or graphical session, no Windows mod DLLs/pack, and less than the documented 80 GB working space. Case sensitivity and paths embedded in research recipes may reveal further data-dependent issues. Keep failures visible rather than skipping validation or rewriting assets.
 
 No blanket `dinput8`, `winhttp`, `dxgi`, or `d3d12` native override is justified by this audit: me3 injects the explicitly named DLL. `d3dcompiler_47` is used for DXBC disassembly; Wine's implementation must produce valid assembly or setup fails. A user confirmed that Microsoft's native compiler fixes missing-signature translation failures. Setup now applies a process-local `d3dcompiler_47=n,b` override, validates a project-authored shader before extraction, and invalidates affected caches when the compiler changes; do not replace Proton's graphics DLLs. See LINUX.md for the test procedure and evidence limits.
 
 A later paired Windows/Linux shader comparison isolated three six-decimal halfway-rounding differences. Linux disassembly now carries a hexadecimal-literal companion, used to derive ties-to-even formatting from original float bits without altering expected hashes. The main uploaded shader reproduced the Windows bytes and expected replay hash after correction; this does not validate all game shaders or the separate outfit-statistics recipe.
+
+## User-reported runtime result
+
+On 2026-10-25, the user confirmed that Linux setup completed after the shader-log concurrency fix, then confirmed that the real launcher worked after the me3 version-capture fix. Their environment used native Steam, `Proton-GE Latest`, Node.js 24.22.1, and Windows me3 on Nobara. Exact numbered Proton and me3 releases were not captured. End-to-end setup and launch have therefore been tested under Proton; comprehensive gameplay and save isolation remain separate validation items in LINUX.md.
