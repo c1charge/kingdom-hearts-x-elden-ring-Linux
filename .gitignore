@@ -50,3 +50,7 @@
 /tools/bin/
 /dist/
 /release-tools/sea/node_modules/
+
+# Python Linux platform helpers and tests
+__pycache__/
+*.pyc

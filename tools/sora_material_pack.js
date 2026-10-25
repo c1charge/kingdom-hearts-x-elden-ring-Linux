@@ -738,7 +738,7 @@ function main() {
   const missing = fs.readdirSync(CACHE).filter((f) => f.endsWith('.bin') && !fs.existsSync(path.join(CACHE, f.replace(/\.bin$/, '.asm'))));
   if (missing.length) {
     console.log(`disassembling ${missing.length} shaders (d3dcompiler_47.dll) ...`);
-    const r = cp.spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'dxbc_disasm.ps1'), '-Dir', CACHE], { encoding: 'utf8' });
+    const r = require('./lib/windows_api').disassemble(CACHE);
     if (r.status !== 0) throw new Error('dxbc_disasm.ps1 failed: ' + (r.stderr || r.stdout));
   }
   // ---- translate
@@ -973,7 +973,7 @@ function ownKhs() {
   const ownKey = 'khs.' + asset.split('/').pop().split('.')[0] + '.pp';
   const own = khsPrepare(dump, asset, ownKey); if (!own) throw new Error(asset + ': no post-process pixel shader in its shader map');
   const std = khsPrepare(dump); if (!std) throw new Error(KHS + ': not found');
-  const r = cp.spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'dxbc_disasm.ps1'), '-Dir', cache], { encoding: 'utf8' });
+  const r = require('./lib/windows_api').disassemble(cache);
   if (r.status !== 0) throw new Error('dxbc_disasm.ps1 failed: ' + (r.stderr || r.stdout));
   const asmOf = (k) => { const x = fs.readFileSync(path.join(cache, k + '.asm'), 'utf8'); if (/^HRESULT/.test(x)) throw new Error(k + ': disassembly failed'); return x; };
   const t = transpile(asmOf(ownKey), own.meta); if (!t.ok) throw new Error(asset + ': NOT TRANSLATED: ' + t.why);

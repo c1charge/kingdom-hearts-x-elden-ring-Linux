@@ -37,6 +37,12 @@ needs from them, on your PC.
 
 You don't need to install anything else. The setup has everything it needs built in.
 
+## Linux (experimental)
+
+Native Linux setup and a Proton launcher are available for Nobara/Fedora with native Steam.
+See [docs/LINUX.md](docs/LINUX.md) for prerequisites, dry runs and current validation limits.
+The existing Windows setup below is unchanged. Proton injection and gameplay have not yet been verified.
+
 ## Install
 
 1. **Download** the latest `kingdom-hearts-x-elden-ring-...-win64.zip` from the

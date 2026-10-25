@@ -18,6 +18,11 @@ need any of it: see the [README](../README.md).
 No game files are in the repository. Everything taken from the games is made on your PC from your own installs. See
 [LEGAL.md](../LEGAL.md).
 
+## Linux
+
+See [LINUX.md](LINUX.md) for native Node asset generation and Proton launch support.
+The Windows mod DLLs still require a Windows build; Linux does not replace the MSVC build below.
+
 ## Building from source
 
 You need:

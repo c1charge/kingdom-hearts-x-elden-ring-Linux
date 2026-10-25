@@ -124,6 +124,12 @@ function undcx(files) {
   fs.mkdirSync(oodle, { recursive: true });
   const dll = path.join(oodle, 'oo2core_6_win64.dll');
   if (!fs.existsSync(dll)) fs.copyFileSync(path.join(GAME, 'oo2core_6_win64.dll'), dll);
+  if (process.platform === 'linux') {
+    const r = require('./lib/windows_api').helper('undcx', [dll, ...todo]);
+    process.stdout.write(r.stdout || '');
+    if (r.error || r.status !== 0) throw new Error('DCX: ' + (r.error || r.stderr || r.stdout));
+    return;
+  }
   const ps1 = path.join(oodle, 'undcx.ps1');
   fs.writeFileSync(ps1, `param([string]$OodleDir, [string]$Files)
 Add-Type -TypeDefinition @"

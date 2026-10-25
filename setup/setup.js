@@ -56,8 +56,7 @@ const ER_APPID = '1245620';
 // The DirectX shader compiler the pack's shaders are compiled with when the Windows SDK's is not installed: Microsoft's own
 // release DirectXShaderCompiler v1.8.2502 (the version of the Windows SDK 10.0.26100 the mod is built with; the LLVM and
 // MIT licences and dxil.dll's MS licence come in the zip), downloaded once into tools/bin/dxc, checked by its SHA-256.
-const DXC_URL = 'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip';
-const DXC_SHA256 = '70b1913a1bfce4a3e1a5311d16246f4ecdf3a3e613abec8aa529e57668426f85';
+const { url: DXC_URL, sha256: DXC_SHA256 } = require('./dxc-pin.json');
 const DXC_DIR = path.join(REPO, 'tools', 'bin', 'dxc');
 
 // ---------------------------------------------------------------- arguments
