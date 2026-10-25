@@ -36,7 +36,7 @@ static uint32_t be32(const unsigned char *b) {
     return ((uint32_t)b[0]<<24) | ((uint32_t)b[1]<<16) | ((uint32_t)b[2]<<8) | b[3];
 }
 /* Compile only our own tiny shader: no game assets are needed for this preflight. */
-static int probe(void) {
+static int probe(const wchar_t *report) {
     typedef HRESULT (WINAPI *Compile)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO *, ID3DInclude *, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob **, ID3DBlob **);
     typedef HRESULT (WINAPI *Dis)(LPCVOID, SIZE_T, UINT, LPCSTR, ID3DBlob **);
     HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll");
@@ -54,14 +54,17 @@ static int probe(void) {
     wchar_t file[32768]; char utf8[131072];
     DWORD len = GetModuleFileNameW(module, file, 32768);
     if (!len || len >= 32768 || !WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), NULL, NULL)) return fail(L"cannot identify loaded compiler");
-    printf("KH_COMPILER_PATH=%s\n", utf8);
+    FILE *stream = report ? _wfopen(report, L"wb") : stdout;
+    if (!stream) return fail(L"cannot open disassembler report");
+    int ok = fprintf(stream, "KH_COMPILER_PATH=%s\n", utf8) >= 0;
     size_t size = ID3D10Blob_GetBufferSize(assembly);
     const char *text = ID3D10Blob_GetBufferPointer(assembly);
     if (size && text[size-1] == 0) size--;
-    fwrite(text, 1, size, stdout);
+    if (fwrite(text, 1, size, stream) != size) ok = 0;
+    if (report && fclose(stream)) ok = 0;
     ID3D10Blob_Release(assembly);
     FreeLibrary(module);
-    return 0;
+    return ok ? 0 : fail(L"cannot write disassembler report");
 }
 
 static int disasm(const wchar_t *dir) {
@@ -149,11 +152,11 @@ static int selfcheck(const wchar_t *mods) {
     return n ? 0 : 1;
 }
 int wmain(int argc, wchar_t **argv) {
-    if (argc == 2 && !wcscmp(argv[1], L"probe")) return probe();
+    if ((argc == 2 || argc == 3) && !wcscmp(argv[1], L"probe")) return probe(argc == 3 ? argv[2] : NULL);
     if (argc == 3 && !wcscmp(argv[1], L"disasm")) return disasm(argv[2]);
     if (argc >= 4 && !wcscmp(argv[1], L"undcx")) return undcx(argc, argv);
     if (argc == 3 && !wcscmp(argv[1], L"version")) return version(argv[2]);
     if (argc == 3 && !wcscmp(argv[1], L"selfcheck")) return selfcheck(argv[2]);
-    fputs("usage: helper probe | disasm DIR | undcx DLL FILE... | version EXE | selfcheck MODS\n", stderr);
+    fputs("usage: helper probe [REPORT] | disasm DIR | undcx DLL FILE... | version EXE | selfcheck MODS\n", stderr);
     return 2;
 }

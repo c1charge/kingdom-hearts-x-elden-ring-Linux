@@ -103,7 +103,7 @@ The dedicated game save is inside the Elden Ring prefix, normally `pfx/drive_c/u
 
 There is no evidence yet that extra injection overrides are needed. me3 uses its own injection path; do not blindly add `dinput8`, `winhttp`, `dxgi` or `d3d12` overrides.
 
-Linux **setup** adds `d3dcompiler_47=n,b` to its child-process environment and preserves unrelated DLL overrides. This selects a native compiler when installed. The early preflight stops if fallback Wine disassembly lacks the input-signature format needed by the translator. It does not alter the prefix registry, normal Steam launches, or the launcher environment. `--dll-overrides '...'` still selects other process-local overrides, but setup always sets the compiler entry to `n,b`.
+Linux **setup** adds `d3dcompiler_47=n,b` to its child-process environment and preserves unrelated DLL overrides. This selects a native compiler when installed. The early preflight reads `build/packgen/logs/d3dcompiler-preflight.txt`, written directly by the helper, so it does not depend on Proton forwarding Windows console output. The report must be freshly generated; an old report is removed before each probe. Missing reports are diagnosed as helper/Proton execution failures, not evidence of a missing compiler. The preflight stops if the actual disassembly lacks the input-signature format needed by the translator. It does not alter the prefix registry, normal Steam launches, or the launcher environment. `--dll-overrides '...'` still selects other process-local overrides, but setup always sets the compiler entry to `n,b`.
 
 A user confirmed that installing Microsoft's native compiler fixed widespread `NOT TRANSLATED: input v0` failures under Proton. To install it yourself:
 

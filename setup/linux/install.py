@@ -102,14 +102,23 @@ def setup_overrides(value):
     return ';'.join([*kept, 'd3dcompiler_47=n,b'])
 
 
-def probe_disassembler(bridge, helper, env, ctx, log):
+def probe_disassembler(bridge, helper, env, ctx, log, report=None):
     fix = (f'Install Microsoft d3dcompiler_47 in the selected Elden Ring prefix: '
            f'protontricks {ER_ID} d3dcompiler_47 (ensure Protontricks targets {ctx["prefix"]}). '
            'Then rerun setup. A custom --helper must be rebuilt from current windows-helper.c.')
+    report = Path(report) if report is not None else ROOT / 'build/packgen/logs/d3dcompiler-preflight.txt'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.unlink(missing_ok=True)  # Never accept a report left by an older process.
     try:
-        output = run([*bridge, helper, 'probe'], env=env, log=log)
+        run([*bridge, helper, 'probe', report], env=env, log=log)
     except (OSError, RuntimeError) as error:
         raise ValueError(f'D3D disassembler preflight failed: {error}. {fix}') from error
+    if not report.is_file():
+        raise ValueError('Proton returned without producing the disassembler report at '
+                         f'{report}. This does not establish a missing compiler DLL. '
+                         'Check Proton logs, the selected prefix and helper execution; '
+                         'rebuild any custom --helper from current windows-helper.c.')
+    output = report.read_text(encoding='utf-8-sig')
     # Match the semantic-row grammar the material translator actually consumes.
     rows = re.findall(r'^// (\w+)\s+(\d+)\s+(\w+)\s+(\d+)\s+(\w+)\s+(\w+)\s*(.*?)\s*$', output, re.M)
     if not any(row[0] == 'TEXCOORD' and row[1] == '0' for row in rows) or not any(row[0] == 'SV_Position' for row in rows):

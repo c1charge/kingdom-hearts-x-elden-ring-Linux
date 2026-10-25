@@ -324,8 +324,10 @@ class Fixture(unittest.TestCase):
                 return '2.7.2.0\n'
             if 'probe' in cmd:
                 if not probe_ok:
-                    return 'ps_5_0\ndcl_input_ps v0.xy\n'
-                return 'KH_COMPILER_PATH=' + common.win_path(dxc.parent / 'dxcompiler.dll') + '\n// TEXCOORD 0 xy 0 NONE float xy\n// SV_Position 0 xyzw 1 POS float xy\n'
+                    Path(cmd[-1]).write_text('ps_5_0\ndcl_input_ps v0.xy\n')
+                else:
+                    Path(cmd[-1]).write_text('KH_COMPILER_PATH=' + common.win_path(dxc.parent / 'dxcompiler.dll') + '\n// TEXCOORD 0 xy 0 NONE float xy\n// SV_Position 0 xyzw 1 POS float xy\n')
+                return 'ProtonFixes: skipping fixes\n'
             if 'tools/pak_key.js' in cmd:
                 common.atomic_json(self.root / 'audit/triage/pak_key.json', {'key_file_offset': 42, 'verified_paks': 1, 'total_paks': 1})
             if 'tools/packgen.js' in cmd and 'extract' in cmd:
@@ -369,16 +371,29 @@ class Fixture(unittest.TestCase):
         dll = touch(self.base / 'compiler.dll', b'compiler fixture')
         helper = touch(self.base / 'helper.exe', b'helper fixture')
         output = 'KH_COMPILER_PATH=' + common.win_path(dll) + '\n// TEXCOORD 0 xy 0 NONE float xy\n// SV_Position 0 xyzw 1 POS float xy\n'
-        with patch('install.run', return_value=output):
-            identity = install.probe_disassembler([], helper, {'WINEDLLOVERRIDES': 'd3dcompiler_47=n,b'}, self.ctx(), None)
+        report = self.base / 'probe.txt'
+        def silent_report(command, **kwargs):
+            Path(command[-1]).write_text(output)
+            return 'ProtonFixes WARN: Skipping fix execution.\n'
+        with patch('install.run', side_effect=silent_report):
+            identity = install.probe_disassembler([], helper, {'WINEDLLOVERRIDES': 'd3dcompiler_47=n,b'}, self.ctx(), None, report=report)
         self.assertEqual(identity['dll_sha256'], hashlib.sha256(dll.read_bytes()).hexdigest())
         for bad in ['ps_5_0\ndcl_input_ps v0.xy', '// TEXCOORD 0 xy 0 NONE float xy']:
-            with patch('install.run', return_value=bad), self.assertRaisesRegex(ValueError, 'protontricks 1245620 d3dcompiler_47'):
-                install.probe_disassembler([], helper, {}, self.ctx(), None)
+            def bad_report(command, **kwargs):
+                Path(command[-1]).write_text(bad)
+                return ''
+            with patch('install.run', side_effect=bad_report), self.assertRaisesRegex(ValueError, 'protontricks 1245620 d3dcompiler_47'):
+                install.probe_disassembler([], helper, {}, self.ctx(), None, report=report)
+
+    def test_probe_does_not_accept_stale_report_or_blame_silent_output_on_dll(self):
+        report = touch(self.base / 'probe.txt', b'old report')
+        with patch('install.run', return_value='ProtonFixes warning only'), self.assertRaisesRegex(ValueError, 'without producing.*report'):
+            install.probe_disassembler([], 'helper.exe', {}, self.ctx(), None, report=report)
+        self.assertFalse(report.exists())
 
     def test_probe_failure_gives_prefix_specific_remediation(self):
         with patch('install.run', side_effect=RuntimeError('export missing')), self.assertRaisesRegex(ValueError, str(self.prefix)):
-            install.probe_disassembler([], 'helper.exe', {}, self.ctx(), None)
+            install.probe_disassembler([], 'helper.exe', {}, self.ctx(), None, report=self.base / 'probe.txt')
 
     def test_shader_cache_change_invalidates_consumers_but_preserves_sources(self):
         journal = self.root / 'build/packgen/done_steps.json'
